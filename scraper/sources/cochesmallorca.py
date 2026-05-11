@@ -179,7 +179,9 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
 
             img = container.find("img")
             if img:
-                image_url = img.get("src") or img.get("data-src")
+                raw_src = img.get("src") or img.get("data-src")
+                if raw_src:
+                    image_url = urljoin(url_, raw_src)  # resolve relative → absolute
 
         title_parts = title.split()
         make = title_parts[0] if title_parts else None
