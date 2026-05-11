@@ -1,6 +1,11 @@
 """
 CochesMallorca.com scraper — the main Mallorca-specific used car aggregator.
-938+ listings, clean server-rendered HTML, no JS rendering needed.
+
+Two-pass approach:
+  1. Scrape list pages to collect all listing URLs + basic fields.
+  2. Fetch each detail page to extract the full photo gallery.
+
+Set fetch_images=False for fast/dry runs where image freshness isn't needed.
 """
 import logging
 import time
@@ -39,32 +44,76 @@ def get_soup(url: str) -> BeautifulSoup:
     return BeautifulSoup(r.text, "html.parser")
 
 
-def parse_fuel(text: str) -> str | None:
-    t = text.lower().strip()
-    for key, val in FUEL_MAP.items():
-        if key in t:
-            return val
-    return None
+def fetch_gallery_images(url: str) -> List[str]:
+    """Fetch all gallery images from a listing detail page."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        images: List[str] = []
+
+        # Try gallery/slider containers first
+        for selector in [
+            "[class*='gallery'] img", "[class*='slider'] img",
+            "[class*='carousel'] img", "[class*='photos'] img",
+            "[class*='photo'] img", "[class*='swiper'] img",
+            "[class*='galeria'] img", "[class*='fotos'] img",
+            "[id*='gallery'] img", "[id*='slider'] img",
+        ]:
+            imgs = soup.select(selector)
+            if imgs:
+                for img in imgs:
+                    src = img.get("src") or img.get("data-src") or img.get("data-original")
+                    if src and src.startswith("http") and "placeholder" not in src.lower():
+                        images.append(src)
+                if images:
+                    break
+
+        # Fallback: all reasonably sized images on the page
+        if not images:
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-src") or img.get("data-original")
+                if not src or not src.startswith("http"):
+                    continue
+                if any(x in src.lower() for x in ["logo", "icon", "placeholder", "sprite", "blank"]):
+                    continue
+                w, h = img.get("width"), img.get("height")
+                if w and h:
+                    try:
+                        if int(w) < 150 or int(h) < 100:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                images.append(src)
+
+        # Deduplicate, preserve order, cap at 20
+        seen: set = set()
+        unique: List[str] = []
+        for img in images:
+            if img not in seen:
+                seen.add(img)
+                unique.append(img)
+        return unique[:20]
+
+    except Exception as e:
+        logger.debug(f"CochesMallorca: could not fetch gallery from {url} — {e}")
+        return []
 
 
 def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
     listings = []
-
-    # Each car is in a div/li that contains an image, price, title link, and specs
-    # Pattern from the page: image → price → title link → year/fuel/km
     cards = soup.select("a[href*='/stock/']")
-
     seen_hrefs = set()
+
     for link in cards:
         href = link.get("href", "")
         if not href or href in seen_hrefs:
             continue
         seen_hrefs.add(href)
 
-        # Extract ID from URL slug (last numeric part)
         id_match = re.search(r"-(\d{4,})$", href.rstrip("/"))
         if not id_match:
-            # try alternate pattern like cl3259853
             id_match = re.search(r"-(cl\d+|ps\d+|\d{4,})$", href.rstrip("/"))
         source_id = id_match.group(1) if id_match else href
 
@@ -74,9 +123,8 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
 
         url_ = f"https://www.cochesmallorca.com{href}" if href.startswith("/") else href
 
-        # Walk up to parent container to find price and specs
         container = link.parent
-        for _ in range(5):  # walk up max 5 levels
+        for _ in range(5):
             if container is None:
                 break
             text_content = container.get_text(" ", strip=True)
@@ -89,7 +137,6 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
         if container:
             full_text = container.get_text(" ", strip=True)
 
-            # Price: number followed by €
             price_match = re.search(r"([\d\.]+)\s*€", full_text)
             if price_match:
                 price_str = re.sub(r"\.", "", price_match.group(1))
@@ -100,12 +147,10 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
                 except ValueError:
                     price = None
 
-            # Year: 4-digit number between 1990-2030
             year_match = re.search(r"\b(19[9]\d|20[0-3]\d)\b", full_text)
             if year_match:
                 year = int(year_match.group(1))
 
-            # Mileage: number followed by km
             km_match = re.search(r"([\d\.]+)\s*km", full_text, re.IGNORECASE)
             if km_match:
                 km_str = re.sub(r"\.", "", km_match.group(1))
@@ -116,18 +161,15 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
                 except ValueError:
                     mileage = None
 
-            # Fuel
             for key, val in FUEL_MAP.items():
                 if key in full_text.lower():
                     fuel = val
                     break
 
-            # Image
             img = container.find("img")
             if img:
                 image_url = img.get("src") or img.get("data-src")
 
-        # Extract make/model from title (first 1-2 words usually)
         title_parts = title.split()
         make = title_parts[0] if title_parts else None
         model = " ".join(title_parts[1:3]) if len(title_parts) > 1 else None
@@ -150,13 +192,13 @@ def parse_listing_page(soup: BeautifulSoup) -> List[CarListing]:
     return listings
 
 
-def scrape(max_pages: int = 15) -> List[CarListing]:
+def scrape(max_pages: int = 15, fetch_images: bool = True) -> List[CarListing]:
     all_listings: List[CarListing] = []
 
+    # Pass 1 — collect listings from all list pages
     for page_num in range(1, max_pages + 1):
         url = f"{BASE_URL}?p={page_num}&ordre="
         logger.info(f"CochesMallorca: page {page_num}/{max_pages} — {url}")
-
         try:
             soup = get_soup(url)
         except requests.HTTPError as e:
@@ -168,7 +210,6 @@ def scrape(max_pages: int = 15) -> List[CarListing]:
 
         listings = parse_listing_page(soup)
         logger.info(f"CochesMallorca: found {len(listings)} listings on page {page_num}")
-
         if not listings:
             logger.info("CochesMallorca: no more listings")
             break
@@ -176,5 +217,20 @@ def scrape(max_pages: int = 15) -> List[CarListing]:
         all_listings.extend(listings)
         time.sleep(1.5)
 
-    logger.info(f"CochesMallorca: collected {len(all_listings)} total listings")
+    logger.info(f"CochesMallorca: collected {len(all_listings)} listings from list pages")
+
+    # Pass 2 — enrich each listing with full gallery from detail page
+    if fetch_images and all_listings:
+        logger.info(f"CochesMallorca: fetching gallery images for {len(all_listings)} listings…")
+        for i, listing in enumerate(all_listings):
+            gallery = fetch_gallery_images(listing.listing_url)
+            if gallery:
+                listing.images = gallery
+                listing.image_url = gallery[0]
+            if (i + 1) % 20 == 0:
+                logger.info(f"CochesMallorca: enriched {i + 1}/{len(all_listings)}")
+            time.sleep(0.5)
+        logger.info("CochesMallorca: gallery enrichment complete")
+
+    logger.info(f"CochesMallorca: done — {len(all_listings)} total listings")
     return all_listings
