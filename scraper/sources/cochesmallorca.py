@@ -12,7 +12,8 @@ import time
 import re
 import requests
 from bs4 import BeautifulSoup
-from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Tuple
 from ..models import CarListing
 
 logger = logging.getLogger(__name__)
@@ -219,17 +220,30 @@ def scrape(max_pages: int = 15, fetch_images: bool = True) -> List[CarListing]:
 
     logger.info(f"CochesMallorca: collected {len(all_listings)} listings from list pages")
 
-    # Pass 2 — enrich each listing with full gallery from detail page
+    # Pass 2 — enrich each listing with full gallery from detail page (parallel)
     if fetch_images and all_listings:
-        logger.info(f"CochesMallorca: fetching gallery images for {len(all_listings)} listings…")
-        for i, listing in enumerate(all_listings):
-            gallery = fetch_gallery_images(listing.listing_url)
-            if gallery:
-                listing.images = gallery
-                listing.image_url = gallery[0]
-            if (i + 1) % 20 == 0:
-                logger.info(f"CochesMallorca: enriched {i + 1}/{len(all_listings)}")
-            time.sleep(0.5)
+        logger.info(f"CochesMallorca: fetching gallery images for {len(all_listings)} listings (parallel)…")
+        total = len(all_listings)
+        completed = 0
+
+        def _fetch(args: Tuple[int, "CarListing"]):
+            idx, listing = args
+            return idx, fetch_gallery_images(listing.listing_url)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(_fetch, (i, l)): i for i, l in enumerate(all_listings)}
+            for future in as_completed(futures):
+                try:
+                    idx, gallery = future.result()
+                    if gallery:
+                        all_listings[idx].images = gallery
+                        all_listings[idx].image_url = gallery[0]
+                except Exception as e:
+                    logger.debug(f"CochesMallorca: enrichment error — {e}")
+                completed += 1
+                if completed % 50 == 0:
+                    logger.info(f"CochesMallorca: enriched {completed}/{total}")
+
         logger.info("CochesMallorca: gallery enrichment complete")
 
     logger.info(f"CochesMallorca: done — {len(all_listings)} total listings")
