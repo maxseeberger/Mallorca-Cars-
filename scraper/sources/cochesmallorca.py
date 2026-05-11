@@ -13,6 +13,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urljoin
 from typing import List, Tuple
 from ..models import CarListing
 
@@ -45,6 +46,9 @@ def get_soup(url: str) -> BeautifulSoup:
     return BeautifulSoup(r.text, "html.parser")
 
 
+SKIP_PATTERNS = ["logo", "icon", "placeholder", "sprite", "blank", "whatsapp", "nodisponible", ".gif", "50x50"]
+
+
 def fetch_gallery_images(url: str) -> List[str]:
     """Fetch all gallery images from a listing detail page."""
     try:
@@ -66,7 +70,10 @@ def fetch_gallery_images(url: str) -> List[str]:
             if imgs:
                 for img in imgs:
                     src = img.get("src") or img.get("data-src") or img.get("data-original")
-                    if src and src.startswith("http") and "placeholder" not in src.lower():
+                    if not src:
+                        continue
+                    src = urljoin(url, src)  # resolve relative → absolute
+                    if not any(p in src.lower() for p in SKIP_PATTERNS):
                         images.append(src)
                 if images:
                     break
@@ -75,9 +82,12 @@ def fetch_gallery_images(url: str) -> List[str]:
         if not images:
             for img in soup.find_all("img"):
                 src = img.get("src") or img.get("data-src") or img.get("data-original")
-                if not src or not src.startswith("http"):
+                if not src:
                     continue
-                if any(x in src.lower() for x in ["logo", "icon", "placeholder", "sprite", "blank"]):
+                src = urljoin(url, src)  # resolve relative → absolute
+                if not src.startswith("http"):
+                    continue
+                if any(p in src.lower() for p in SKIP_PATTERNS):
                     continue
                 w, h = img.get("width"), img.get("height")
                 if w and h:
