@@ -38,7 +38,6 @@ def fetch_page(start: int = 0, items: int = 40) -> dict:
 
 
 def parse_item(item: dict) -> CarListing:
-    # handle both wrapped and unwrapped formats
     content = item.get("content", item)
     specs = content.get("extra_info", content.get("car", {}))
 
@@ -56,10 +55,15 @@ def parse_item(item: dict) -> CarListing:
     slug = content.get("web_slug", content.get("slug", str(content.get("id", ""))))
     listing_url = f"https://es.wallapop.com/item/{slug}"
 
-    images = content.get("images", [content.get("main_image", {})])
-    image_url = None
-    if images and isinstance(images[0], dict):
-        image_url = images[0].get("medium", images[0].get("original"))
+    # Collect all image URLs from the API response
+    raw_images = content.get("images", [content.get("main_image", {})] if content.get("main_image") else [])
+    all_image_urls = []
+    for img in raw_images:
+        if isinstance(img, dict):
+            url = img.get("medium") or img.get("large") or img.get("original")
+            if url:
+                all_image_urls.append(url)
+    image_url = all_image_urls[0] if all_image_urls else None
 
     location = content.get("location", {})
     city = location.get("city", location.get("postal_name", "Mallorca")) if isinstance(location, dict) else "Mallorca"
@@ -78,6 +82,7 @@ def parse_item(item: dict) -> CarListing:
         model=specs.get("model"),
         location=city,
         image_url=image_url,
+        images=all_image_urls,
         description=str(content.get("description", ""))[:500],
     )
 
@@ -99,7 +104,6 @@ def scrape(max_pages: int = 10) -> List[CarListing]:
             logger.warning(f"Wallapop error: {e}")
             break
 
-        # try multiple possible response keys
         items = (
             data.get("search_objects")
             or data.get("items")
