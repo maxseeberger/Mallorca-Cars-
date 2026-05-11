@@ -1,6 +1,10 @@
 """
 Coches.net scraper — requests + BeautifulSoup.
 Filters to Baleares (covers Mallorca, Ibiza, Menorca).
+
+Two-pass approach:
+  1. Scrape list pages for basic fields + thumbnail.
+  2. Fetch each detail page to extract the full photo gallery.
 """
 import logging
 import time
@@ -21,6 +25,7 @@ HEADERS = {
     ),
     "Accept-Language": "es-ES,es;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.coches.net/",
 }
 
 FUEL_MAP = {
@@ -33,6 +38,60 @@ def get_soup(url: str, params: dict = None) -> BeautifulSoup:
     r = requests.get(url, params=params, headers=HEADERS, timeout=20)
     r.raise_for_status()
     return BeautifulSoup(r.text, "html.parser")
+
+
+def fetch_gallery_images(url: str) -> List[str]:
+    """Fetch all gallery images from a coches.net listing detail page."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        images: List[str] = []
+
+        for selector in [
+            "[class*='gallery'] img", "[class*='Gallery'] img",
+            "[class*='slider'] img", "[class*='carousel'] img",
+            "[class*='photos'] img", "[class*='photo'] img",
+            "[class*='swiper'] img", "[class*='mt-Gallery'] img",
+            "[class*='c-gallery'] img", "[class*='DetailGallery'] img",
+        ]:
+            imgs = soup.select(selector)
+            if imgs:
+                for img in imgs:
+                    src = img.get("data-src") or img.get("src") or img.get("data-original")
+                    if src and src.startswith("http") and "placeholder" not in src.lower():
+                        images.append(src)
+                if images:
+                    break
+
+        if not images:
+            for img in soup.find_all("img"):
+                src = img.get("data-src") or img.get("src")
+                if not src or not src.startswith("http"):
+                    continue
+                if any(x in src.lower() for x in ["logo", "icon", "placeholder", "sprite", "blank", "avatar"]):
+                    continue
+                w, h = img.get("width"), img.get("height")
+                if w and h:
+                    try:
+                        if int(w) < 150 or int(h) < 100:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                images.append(src)
+
+        seen: set = set()
+        unique: List[str] = []
+        for img in images:
+            if img not in seen:
+                seen.add(img)
+                unique.append(img)
+        return unique[:20]
+
+    except Exception as e:
+        logger.debug(f"Coches.net: could not fetch gallery from {url} — {e}")
+        return []
 
 
 def parse_card(card) -> CarListing | None:
@@ -98,13 +157,13 @@ def parse_card(card) -> CarListing | None:
         return None
 
 
-def scrape(max_pages: int = 8) -> List[CarListing]:
+def scrape(max_pages: int = 8, fetch_images: bool = True) -> List[CarListing]:
     listings: List[CarListing] = []
 
+    # Pass 1 — collect listings from list pages
     for page_num in range(1, max_pages + 1):
         params = {**PARAMS_BASE, "pg": page_num}
         logger.info(f"Coches.net: page {page_num}/{max_pages}")
-
         try:
             soup = get_soup(BASE_URL, params=params)
         except requests.HTTPError as e:
@@ -131,5 +190,20 @@ def scrape(max_pages: int = 8) -> List[CarListing]:
 
         time.sleep(1.5)
 
-    logger.info(f"Coches.net: collected {len(listings)} listings")
+    logger.info(f"Coches.net: collected {len(listings)} listings from list pages")
+
+    # Pass 2 — enrich with full gallery images
+    if fetch_images and listings:
+        logger.info(f"Coches.net: fetching gallery images for {len(listings)} listings…")
+        for i, listing in enumerate(listings):
+            gallery = fetch_gallery_images(listing.listing_url)
+            if gallery:
+                listing.images = gallery
+                listing.image_url = gallery[0]
+            if (i + 1) % 20 == 0:
+                logger.info(f"Coches.net: enriched {i + 1}/{len(listings)}")
+            time.sleep(0.5)
+        logger.info("Coches.net: gallery enrichment complete")
+
+    logger.info(f"Coches.net: done — {len(listings)} total listings")
     return listings
