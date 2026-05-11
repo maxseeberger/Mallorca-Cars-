@@ -153,17 +153,18 @@ def _parse_article(article) -> CarListing | None:
         return None
 
 
-def scrape(max_pages: int = 20) -> List[CarListing]:
+def scrape(max_pages: int = 22) -> List[CarListing]:
     """
     Scrape up to max_pages pages from motor.es Baleares search.
-    24 listings per page × 20 pages = up to 480 listings.
+    ~22 listings per page × 21 pages = ~462 listings total.
+    Pagination uses ?pagina=N (not ?pg=N).
     """
     listings: List[CarListing] = []
     seen_ids: set = set()
 
     for page_num in range(1, max_pages + 1):
         url = BASE_URL
-        params = {"pg": page_num} if page_num > 1 else {}
+        params = {"pagina": page_num} if page_num > 1 else {}
         logger.info(f"Motor.es: page {page_num}/{max_pages}")
         try:
             r = requests.get(url, params=params, headers=HEADERS, timeout=20)

@@ -18,8 +18,8 @@ logger = logging.getLogger("main")
 SOURCES = [
     ("CochesMallorca", cochesmallorca.scrape, {"max_pages": 15}),
     ("Coches.net",     coches_net.scrape,     {"max_pages": 8}),
-    ("AutoScout24",    autoscout24.scrape,    {"max_pages": 40}),
-    ("Motor.es",       motor.scrape,          {"max_pages": 20}),
+    ("AutoScout24",    autoscout24.scrape,    {"max_pages": 76}),
+    ("Motor.es",       motor.scrape,          {"max_pages": 22}),
     ("Wallapop",       wallapop.scrape,       {"max_pages": 10}),
 ]
 
