@@ -4,7 +4,7 @@ Main scraper entry point.
 import argparse
 import logging
 import sys
-from .sources import cochesmallorca, coches_net
+from .sources import cochesmallorca, coches_net, wallapop, autoscout24, motor
 from . import db
 
 logging.basicConfig(
@@ -18,6 +18,9 @@ logger = logging.getLogger("main")
 SOURCES = [
     ("CochesMallorca", cochesmallorca.scrape, {"max_pages": 15}),
     ("Coches.net",     coches_net.scrape,     {"max_pages": 8}),
+    ("AutoScout24",    autoscout24.scrape,    {"max_pages": 40}),
+    ("Motor.es",       motor.scrape,          {"max_pages": 20}),
+    ("Wallapop",       wallapop.scrape,       {"max_pages": 10}),
 ]
 
 
