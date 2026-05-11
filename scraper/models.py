@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
 class CarListing:
-    source: str           # 'wallapop' | 'milanuncios' | 'coches_net'
+    source: str           # 'wallapop' | 'milanuncios' | 'coches_net' | 'cochesmallorca'
     source_id: str        # ID on the source platform
     title: str
     listing_url: str
@@ -17,8 +17,17 @@ class CarListing:
     make: Optional[str] = None
     model: Optional[str] = None
     location: Optional[str] = None
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None      # primary thumbnail (first image)
+    images: List[str] = field(default_factory=list)  # all gallery images
     description: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {k: v for k, v in self.__dict__.items() if v is not None}
+        d = {}
+        for k, v in self.__dict__.items():
+            if v is None:
+                continue
+            # Don't write empty images list — avoids overwriting existing DB data
+            if k == 'images' and len(v) == 0:
+                continue
+            d[k] = v
+        return d
