@@ -46,7 +46,7 @@ def get_soup(url: str) -> BeautifulSoup:
     return BeautifulSoup(r.text, "html.parser")
 
 
-SKIP_PATTERNS = ["logo", "icon", "placeholder", "sprite", "blank", "whatsapp", "nodisponible", ".gif", "50x50"]
+SKIP_PATTERNS = ["logo", "icon", "placeholder", "sprite", "blank", "whatsapp", "nodisponible", ".gif", "50x50", "chart.googleapis", "qr", "barcode"]
 
 
 def fetch_gallery_images(url: str) -> List[str]:
